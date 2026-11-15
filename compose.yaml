@@ -1,0 +1,22 @@
+services:
+  postgres:
+    image: postgres:17-alpine
+    container_name: opria-postgres
+    environment:
+      POSTGRES_USER: opria
+      POSTGRES_PASSWORD: opria
+      POSTGRES_DB: opria
+    ports:
+      # 5432 is taken by the native PostgreSQL install on this machine.
+      - '5433:5432'
+    volumes:
+      - opria-postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U opria -d opria']
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    restart: unless-stopped
+
+volumes:
+  opria-postgres-data:

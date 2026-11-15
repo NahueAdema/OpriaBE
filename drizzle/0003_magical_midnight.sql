@@ -1,0 +1,2 @@
+ALTER TABLE "app"."services" ADD COLUMN "buffer_minutes" integer DEFAULT 0 NOT NULL;--> statement-breakpoint
+ALTER TABLE "app"."services" ADD CONSTRAINT "services_buffer_range" CHECK ("app"."services"."buffer_minutes" between 0 and 240);
