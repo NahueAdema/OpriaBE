@@ -576,28 +576,34 @@ Los workflows viven en `.github/workflows/`:
   Ejecuta `typecheck`, `lint`, tests unitarios y `build` en un job, y los e2e
   en otro con un servicio `postgres:17` efímero (migra la base antes de correr).
 - `deploy.yml`: escucha la finalización de `CI` en `main` (o un disparo manual)
-  y solo actúa si `NORTHFLAK_DEPLOY_ENABLED=true`. Inicia un build en
-  Northflank con el SHA verificado, espera a que termine, aplica las
-  migraciones desde GitHub Actions contra la base directa y publica ese build
-  en el servicio de deployment.
+  y solo actúa si `RENDER_DEPLOY_ENABLED=true`. Aplica las migraciones desde
+  GitHub Actions contra la base de Neon y dispara el Deploy Hook de Render.
+  Render corre sus propios Build/Start commands definidos en el servicio.
 
 ### Secrets
 
-| Nombre                        | Uso                                                        |
-| ----------------------------- | ---------------------------------------------------------- |
-| `NORTHFLAK_API_TOKEN`         | Token de API con permisos de build y deployment             |
-| `NORTHFLAK_PROJECT_ID`        | ID del proyecto en Northflank                               |
-| `NORTHFLAK_BUILD_SERVICE_ID`  | ID del build service apuntado a este repositorio            |
-| `NORTHFLAK_DEPLOY_SERVICE_ID` | ID del deployment service que corre la API                  |
-| `DATABASE_URL_DIRECT`         | URL directa de Neon (sin `-pooler`) para las migraciones |
+| Nombre                   | Uso                                                  |
+| ------------------------ | ---------------------------------------------------- |
+| `RENDER_DEPLOY_HOOK_URL` | URL del Deploy Hook del Web Service en Render         |
+| `DATABASE_URL_DIRECT`    | Connection string de Neon para `drizzle-kit migrate`  |
 
 ### Variables
 
-| Nombre                       | Default  | Uso                                                |
-| ---------------------------- | -------- | -------------------------------------------------- |
-| `NORTHFLAK_DEPLOY_ENABLED`   | `false`  | Poner `true` para habilitar el deploy automático    |
-| `NORTHFLAK_BRANCH`           | `main`   | Rama que construye el build service de Northflank  |
+| Nombre                  | Default | Uso                                             |
+| ----------------------- | ------- | ----------------------------------------------- |
+| `RENDER_DEPLOY_ENABLED` | `false` | Poner `true` para habilitar el deploy automático |
 
-El build service debe apuntar a este mismo repositorio y usar Node 22. Las
-variables de entorno de producción (`DATABASE_URL`, `JWT_ACCESS_SECRET`,
-`CORS_ORIGINS`, etc.) se configuran en Northflank, no en GitHub.
+### Configuración en Render
+
+El Web Service (`https://opriabe.onrender.com/`) usa:
+
+- Build Command: `npm ci && npm run build`
+- Start Command: `npm run start:prod`
+- Health Check Path: `/v1/health`
+- `NODE_VERSION=22`, `NODE_ENV=production`
+- `DATABASE_URL` (la connection string pooled de Neon), `JWT_ACCESS_SECRET`,
+  `CORS_ORIGINS`
+
+`CORS_ORIGINS` debe incluir el origin del frontend, por ejemplo
+`https://opriadev.netlify.app`. Las migraciones no las corre Render solas: las
+aplica el workflow antes del hook, o `npm run db:migrate` manualmente.
