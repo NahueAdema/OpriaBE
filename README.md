@@ -128,6 +128,7 @@ npm run db:seed      # datos demo
 
 | Método | Ruta                                       | Auth              | Descripción                                              |
 | ------ | ------------------------------------------ | ----------------- | -------------------------------------------------------- |
+| GET    | `/`                                        | público           | Página de bienvenida con estado y guía de enlaces        |
 | GET    | `/v1/health`                               | público           | Liveness probe                                           |
 | GET    | `/v1/health/ready`                         | público           | Readiness probe (incluye Postgres)                       |
 | POST   | `/v1/auth/register`                        | público           | Crea tenant + usuario Dueño                              |

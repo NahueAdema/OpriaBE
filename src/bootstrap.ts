@@ -1,3 +1,4 @@
+import { RequestMethod } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { NestFactory } from '@nestjs/core';
 import {
@@ -53,7 +54,10 @@ export async function createApp(): Promise<NestFastifyApplication> {
     maxAge: 86_400,
   });
 
-  app.setGlobalPrefix(config.get('API_PREFIX', { infer: true }));
+  app.setGlobalPrefix(config.get('API_PREFIX', { infer: true }), {
+    // The landing page lives at the root, outside the versioned API.
+    exclude: [{ path: '/', method: RequestMethod.GET }],
+  });
 
   if (swaggerEnabled) {
     const document = SwaggerModule.createDocument(

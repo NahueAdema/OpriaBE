@@ -22,6 +22,16 @@ describe('health (e2e)', () => {
     expect(response.json()).toMatchObject({ status: 'ok' });
   });
 
+  it('serves the landing page at /', async () => {
+    const response = await app.inject({ method: 'GET', url: '/' });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.headers['content-type']).toContain('text/html');
+    expect(response.body).toContain('Opria');
+    expect(response.body).toContain('/v1/health/ready');
+    expect(response.body).toContain('/docs');
+  });
+
   it('renders unknown routes as Problem Details', async () => {
     const response = await app.inject({ method: 'GET', url: '/v1/missing' });
 
