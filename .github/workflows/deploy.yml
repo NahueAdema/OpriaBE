@@ -1,0 +1,136 @@
+name: Deploy backend
+
+on:
+  workflow_run:
+    workflows: [CI]
+    types: [completed]
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: opria-be-deploy
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    name: Build, migrar y desplegar en Northflank
+    if: >-
+      ${{
+        (github.event_name == 'workflow_dispatch' ||
+         github.event.workflow_run.conclusion == 'success') &&
+        vars.NORTHFLAK_DEPLOY_ENABLED == 'true'
+      }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    env:
+      NF_API: https://api.northflank.com/v1
+      NF_TOKEN: ${{ secrets.NORTHFLAK_API_TOKEN }}
+      NF_PROJECT: ${{ secrets.NORTHFLAK_PROJECT_ID }}
+      NF_BUILD_SERVICE: ${{ secrets.NORTHFLAK_BUILD_SERVICE_ID }}
+      NF_DEPLOY_SERVICE: ${{ secrets.NORTHFLAK_DEPLOY_SERVICE_ID }}
+      NF_BRANCH: ${{ vars.NORTHFLAK_BRANCH || 'main' }}
+      DEPLOY_SHA: ${{ github.event.workflow_run.head_sha || github.sha }}
+    steps:
+      - name: Checkout del commit verificado
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ env.DEPLOY_SHA }}
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install
+        run: npm ci
+
+      - name: Start Northflank build
+        id: build
+        shell: bash
+        run: |
+          set -euo pipefail
+          payload=$(jq -nc --arg branch "$NF_BRANCH" --arg sha "$DEPLOY_SHA" \
+            '{branch: $branch, sha: $sha}')
+          response=$(curl -fsS -X POST \
+            -H "Authorization: Bearer $NF_TOKEN" \
+            -H 'Content-Type: application/json' \
+            --data "$payload" \
+            "$NF_API/projects/$NF_PROJECT/services/$NF_BUILD_SERVICE/build")
+          build_id=$(printf '%s' "$response" | jq -r '.data.id // empty')
+          if [ -z "$build_id" ]; then
+            echo 'No se pudo iniciar el build de Northflank:' >&2
+            printf '%s\n' "$response" >&2
+            exit 1
+          fi
+          echo "build_id=$build_id" >> "$GITHUB_OUTPUT"
+          echo "Build iniciado: $build_id"
+
+      - name: Wait for build
+        shell: bash
+        run: |
+          set -euo pipefail
+          url="$NF_API/projects/$NF_PROJECT/services/$NF_BUILD_SERVICE/build/$BUILD_ID"
+          for attempt in $(seq 1 60); do
+            response=$(curl -fsS -H "Authorization: Bearer $NF_TOKEN" "$url")
+            status=$(printf '%s' "$response" | jq -r '.data.status // "UNKNOWN"')
+            concluded=$(printf '%s' "$response" | jq -r '.data.concluded // false')
+            success=$(printf '%s' "$response" | jq -r '.data.success // false')
+            echo "[$attempt/60] Build $BUILD_ID: $status"
+            if [ "$concluded" = 'true' ]; then
+              if [ "$success" = 'true' ]; then
+                echo 'Build finalizado correctamente'
+                exit 0
+              fi
+              echo 'El build de Northflank falló:' >&2
+              printf '%s\n' "$response" >&2
+              exit 1
+            fi
+            sleep 15
+          done
+          echo "Timeout esperando el build $BUILD_ID" >&2
+          exit 1
+        env:
+          BUILD_ID: ${{ steps.build.outputs.build_id }}
+
+      - name: Apply database migrations
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL_DIRECT }}
+          DATABASE_URL_DIRECT: ${{ secrets.DATABASE_URL_DIRECT }}
+        run: npm run db:migrate
+
+      - name: Deploy build
+        shell: bash
+        run: |
+          set -euo pipefail
+          payload=$(jq -nc \
+            --arg id "$NF_BUILD_SERVICE" \
+            --arg branch "$NF_BRANCH" \
+            --arg sha "$DEPLOY_SHA" \
+            --arg buildId "$BUILD_ID" \
+            '{internal: {id: $id, branch: $branch, buildSHA: $sha, buildId: $buildId}}')
+          response=$(curl -fsS -X POST \
+            -H "Authorization: Bearer $NF_TOKEN" \
+            -H 'Content-Type: application/json' \
+            --data "$payload" \
+            "$NF_API/projects/$NF_PROJECT/services/$NF_DEPLOY_SERVICE/deployment")
+          echo 'Deploy solicitado'
+          printf '%s\n' "$response" | jq '{id: .data.id, status: .data.status}' || printf '%s\n' "$response"
+        env:
+          BUILD_ID: ${{ steps.build.outputs.build_id }}
+
+      - name: Summary
+        shell: bash
+        run: |
+          {
+            echo '### Deploy backend'
+            echo
+            echo "- Commit: \`$DEPLOY_SHA\`"
+            echo "- Rama: \`$NF_BRANCH\`"
+            echo "- Build: \`$BUILD_ID\`"
+          } >> "$GITHUB_STEP_SUMMARY"
+        env:
+          BUILD_ID: ${{ steps.build.outputs.build_id }}

@@ -567,3 +567,37 @@ Todas las respuestas de error usan RFC 9457:
 - Validá en el borde: los controllers no reciben datos sin pasar por Zod.
 - No accedas a `process.env` fuera de `src/config/env.ts`.
 - Los módulos de negocio se agregan cuando se confirme el alcance del producto.
+
+## CI / CD
+
+Los workflows viven en `.github/workflows/`:
+
+- `ci.yml`: corre en push a `main`, en pull requests y por disparo manual.
+  Ejecuta `typecheck`, `lint`, tests unitarios y `build` en un job, y los e2e
+  en otro con un servicio `postgres:17` efímero (migra la base antes de correr).
+- `deploy.yml`: escucha la finalización de `CI` en `main` (o un disparo manual)
+  y solo actúa si `NORTHFLAK_DEPLOY_ENABLED=true`. Inicia un build en
+  Northflank con el SHA verificado, espera a que termine, aplica las
+  migraciones desde GitHub Actions contra la base directa y publica ese build
+  en el servicio de deployment.
+
+### Secrets
+
+| Nombre                        | Uso                                                        |
+| ----------------------------- | ---------------------------------------------------------- |
+| `NORTHFLAK_API_TOKEN`         | Token de API con permisos de build y deployment             |
+| `NORTHFLAK_PROJECT_ID`        | ID del proyecto en Northflank                               |
+| `NORTHFLAK_BUILD_SERVICE_ID`  | ID del build service apuntado a este repositorio            |
+| `NORTHFLAK_DEPLOY_SERVICE_ID` | ID del deployment service que corre la API                  |
+| `DATABASE_URL_DIRECT`         | URL directa de Neon (sin `-pooler`) para las migraciones |
+
+### Variables
+
+| Nombre                       | Default  | Uso                                                |
+| ---------------------------- | -------- | -------------------------------------------------- |
+| `NORTHFLAK_DEPLOY_ENABLED`   | `false`  | Poner `true` para habilitar el deploy automático    |
+| `NORTHFLAK_BRANCH`           | `main`   | Rama que construye el build service de Northflank  |
+
+El build service debe apuntar a este mismo repositorio y usar Node 22. Las
+variables de entorno de producción (`DATABASE_URL`, `JWT_ACCESS_SECRET`,
+`CORS_ORIGINS`, etc.) se configuran en Northflank, no en GitHub.
