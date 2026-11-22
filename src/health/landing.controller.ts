@@ -65,6 +65,9 @@ export class LandingController {
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="description" content="Opria API: servicio de turnos y disponibilidad para negocios y clientes.">
+  <link rel="icon" href="/favicon.ico" sizes="any">
+  <link rel="icon" href="/logo.png" type="image/png">
+  <link rel="apple-touch-icon" href="/logo.png">
   <title>Opria API</title>
   <style>
     :root {
@@ -97,7 +100,7 @@ export class LandingController {
       background: #ffffff08; color: var(--muted); font-size: .8rem; letter-spacing: .04em;
       text-transform: uppercase;
     }
-    .badge::before { content: ''; width: .5rem; height: .5rem; border-radius: 50%; background: var(--accent); }
+    .badge img { width: 1.15rem; height: 1.15rem; object-fit: contain; }
     h1 { font-size: clamp(2.1rem, 5vw, 3.4rem); line-height: 1.08; margin: 1.25rem 0 .75rem; letter-spacing: -.03em; }
     h1 span { color: var(--accent); }
     .lead { max-width: 42rem; color: var(--muted); font-size: 1.05rem; margin: 0 0 1.25rem; }
@@ -142,7 +145,7 @@ export class LandingController {
 <body>
   <main class="wrap">
     <header>
-      <div class="badge">Opria · API</div>
+      <div class="badge"><img src="/logo-white.png" alt="">Opria · API</div>
       <h1>Turnos claros,<br><span>reservas simples.</span></h1>
       <p class="lead">
         Este es el backend de Opria: administra negocios, servicios, staff,
