@@ -6,6 +6,9 @@ export default defineConfig({
     globals: true,
     root: './',
     include: ['test/**/*.e2e-spec.ts'],
+    // Dev and prod share a remote Neon database; allow for network latency.
+    testTimeout: 20_000,
+    hookTimeout: 20_000,
     env: {
       NODE_ENV: 'test',
       LOG_LEVEL: 'silent',

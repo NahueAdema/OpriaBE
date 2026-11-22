@@ -19,12 +19,14 @@ export interface ProblemDetails {
   status: number;
   detail?: string;
   instance?: string;
+  code?: string;
   errors?: ValidationIssue[];
 }
 
 interface NormalizedException {
   status: number;
   detail?: string;
+  code?: string;
   errors?: ValidationIssue[];
 }
 
@@ -52,7 +54,7 @@ export class ProblemDetailsFilter implements ExceptionFilter {
       return;
     }
 
-    const { status, detail, errors } = this.normalize(exception);
+    const { status, detail, errors, code } = this.normalize(exception);
 
     const problem: ProblemDetails = {
       type: 'about:blank',
@@ -60,6 +62,7 @@ export class ProblemDetailsFilter implements ExceptionFilter {
       status,
       ...(detail ? { detail } : {}),
       instance: request.url,
+      ...(code ? { code } : {}),
       ...(errors ? { errors } : {}),
     };
 
@@ -123,6 +126,7 @@ export class ProblemDetailsFilter implements ExceptionFilter {
           : typeof message === 'string'
             ? message
             : undefined,
+        code: typeof body.code === 'string' ? body.code : undefined,
         errors: Array.isArray(body.errors)
           ? (body.errors as ValidationIssue[])
           : undefined,

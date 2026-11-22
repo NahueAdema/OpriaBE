@@ -1,3 +1,5 @@
+import { fileURLToPath } from 'node:url';
+import fastifyStatic from '@fastify/static';
 import { RequestMethod } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { NestFactory } from '@nestjs/core';
@@ -12,7 +14,10 @@ import { Logger as PinoLogger } from 'nestjs-pino';
 import { AppModule } from './app.module.js';
 import type { Env } from './config/env.js';
 
-const DEV_CORS_ORIGINS = ['http://localhost:3000'];
+const DEV_CORS_ORIGINS = [
+  'http://localhost:3000',
+  'http://127.0.0.1:3000',
+];
 
 export async function createApp(): Promise<NestFastifyApplication> {
   const adapter = new FastifyAdapter({
@@ -46,6 +51,11 @@ export async function createApp(): Promise<NestFastifyApplication> {
     contentSecurityPolicy: swaggerEnabled ? false : undefined,
   });
   await app.register(cookie);
+  await app.register(fastifyStatic, {
+    root: fileURLToPath(new URL('../public', import.meta.url)),
+    prefix: '/',
+    wildcard: false,
+  });
 
   app.enableCors({
     origin: allowedOrigins.length > 0 ? allowedOrigins : false,

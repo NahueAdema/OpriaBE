@@ -1,9 +1,15 @@
 import type { NestFastifyApplication } from '@nestjs/platform-fastify';
 import { eq } from 'drizzle-orm';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { CUSTOMER_ACCOUNT_ERROR_CODE } from '../src/auth/auth.service.js';
 import { createApp } from '../src/bootstrap.js';
 import { DatabaseService } from '../src/database/database.service.js';
-import { memberships, tenants, users } from '../src/database/schema/index.js';
+import {
+  customers,
+  memberships,
+  tenants,
+  users,
+} from '../src/database/schema/index.js';
 
 /**
  * These tests need a reachable Postgres with migrations applied:
@@ -14,6 +20,7 @@ const runDbTests = process.env.RUN_DB_TESTS === '1';
 
 const suffix = `${Date.now()}`.slice(-8);
 const email = `owner-${suffix}@opria.test`;
+const customerEmail = `cliente-${suffix}@opria.test`;
 const slug = `test-${suffix}`;
 const password = 'super-secret-passphrase';
 
@@ -46,6 +53,7 @@ describe.skipIf(!runDbTests)('auth (e2e)', () => {
     // Deleting the tenant and user cascades to memberships and refresh tokens.
     await database.db.delete(tenants).where(eq(tenants.slug, slug));
     await database.db.delete(users).where(eq(users.email, email));
+    await database.db.delete(customers).where(eq(customers.email, customerEmail));
     await app.close();
   });
 
@@ -169,7 +177,7 @@ describe.skipIf(!runDbTests)('auth (e2e)', () => {
     expect(refresh.statusCode).toBe(401);
   });
 
-  it('requires tenantSlug when the user belongs to several tenants', async () => {
+  it('picks the highest-priority tenant when the user belongs to several', async () => {
     const secondSlug = `${slug}-two`;
 
     const [secondTenant] = await database.db
@@ -188,7 +196,11 @@ describe.skipIf(!runDbTests)('auth (e2e)', () => {
       url: '/v1/auth/login',
       payload: { email, password },
     });
-    expect(withoutSlug.statusCode).toBe(400);
+    expect(withoutSlug.statusCode).toBe(200);
+    expect(withoutSlug.json<AuthResult>().tenant).toMatchObject({
+      slug,
+      role: 'owner',
+    });
 
     const withSlug = await app.inject({
       method: 'POST',
@@ -202,6 +214,33 @@ describe.skipIf(!runDbTests)('auth (e2e)', () => {
     });
 
     await database.db.delete(tenants).where(eq(tenants.slug, secondSlug));
+  });
+
+  it('returns a stable hint when customer credentials hit the business login', async () => {
+    const customerPassword = 'cliente-super-secreto';
+
+    const registration = await app.inject({
+      method: 'POST',
+      url: '/v1/customer-auth/register',
+      payload: {
+        name: 'Cliente Test',
+        email: customerEmail,
+        phone: '+54 9 11 5555 5555',
+        password: customerPassword,
+      },
+    });
+    expect(registration.statusCode).toBe(201);
+
+    const response = await app.inject({
+      method: 'POST',
+      url: '/v1/auth/login',
+      payload: { email: customerEmail, password: customerPassword },
+    });
+
+    expect(response.statusCode).toBe(401);
+    expect(response.json<{ code?: string }>().code).toBe(
+      CUSTOMER_ACCOUNT_ERROR_CODE,
+    );
   });
 
   it('rejects a wrong current password', async () => {

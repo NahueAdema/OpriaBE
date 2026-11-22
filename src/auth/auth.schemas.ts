@@ -25,7 +25,7 @@ export const registerSchema = z.object({
 export const loginSchema = z.object({
   email,
   password: z.string().min(1).max(128),
-  /** Required only when the user belongs to more than one tenant. */
+  /** Legacy override; the login form no longer asks for it. */
   tenantSlug: tenantSlug.optional(),
 });
 

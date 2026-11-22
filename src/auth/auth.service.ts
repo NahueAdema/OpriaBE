@@ -14,7 +14,9 @@ import { uniqueViolationConstraint } from '../common/database/postgres-errors.js
 import type { Env } from '../config/env.js';
 import { DatabaseService } from '../database/database.service.js';
 import {
+  customers,
   type Membership,
+  type MembershipRole,
   memberships,
   refreshTokens,
   type Tenant,
@@ -33,8 +35,30 @@ import type { AccessTokenPayload } from './auth.types.js';
 
 const DAY_MS = 86_400_000;
 
+/** Stable code the web uses to point customer accounts at their own login. */
+export const CUSTOMER_ACCOUNT_ERROR_CODE = 'CUSTOMER_ACCOUNT';
+
+/** Lower rank wins when a user belongs to several active businesses. */
+const STAFF_ROLE_RANK: Record<MembershipRole, number> = {
+  owner: 0,
+  admin: 1,
+  staff: 2,
+  customer: 3,
+};
+
 function hashToken(token: string): string {
   return createHash('sha256').update(token).digest('hex');
+}
+
+function invalidCredentials(): never {
+  throw new UnauthorizedException('Invalid email or password');
+}
+
+function customerAccountHint(): never {
+  throw new UnauthorizedException({
+    message: 'Esta cuenta es de cliente. Ingresá desde el espacio de clientes.',
+    code: CUSTOMER_ACCOUNT_ERROR_CODE,
+  });
 }
 
 @Injectable()
@@ -98,42 +122,73 @@ export class AuthService {
   }
 
   async login(input: LoginInput): Promise<AuthResult> {
-    const user = await this.database.db.query.users.findFirst({
-      where: eq(users.email, input.email),
-    });
+    const [user, customer] = await Promise.all([
+      this.database.db.query.users.findFirst({
+        where: eq(users.email, input.email),
+      }),
+      this.database.db.query.customers.findFirst({
+        where: eq(customers.email, input.email),
+      }),
+    ]);
 
-    if (!user) {
+    if (user) {
+      const passwordMatches = await argon2.verify(
+        user.passwordHash,
+        input.password,
+      );
+
+      if (!passwordMatches) {
+        invalidCredentials();
+      }
+
+      const candidates = (
+        await this.database.db.query.memberships.findMany({
+          where: eq(memberships.userId, user.id),
+          with: { tenant: true },
+        })
+      ).filter(
+        (candidate) =>
+          candidate.tenant.status === 'active' &&
+          candidate.role !== 'customer',
+      );
+
+      if (candidates.length > 0) {
+        const membership = this.pickMembership(candidates, input.tenantSlug);
+
+        return this.buildAuthResult(user, membership, membership.tenant);
+      }
+
+      // The staff password is valid but there is no active business. A customer
+      // with the same email and password may still exist in the other realm.
+      if (
+        customer &&
+        (await argon2.verify(customer.passwordHash, input.password))
+      ) {
+        customerAccountHint();
+      }
+
+      throw new ForbiddenException('User does not belong to an active tenant');
+    }
+
+    if (!customer) {
       // Spend the same time as a real verification to avoid leaking which
       // emails are registered.
       await argon2.hash(input.password);
-      throw new UnauthorizedException('Invalid email or password');
+      invalidCredentials();
     }
 
-    const passwordMatches = await argon2.verify(
-      user.passwordHash,
+    const customerMatches = await argon2.verify(
+      customer.passwordHash,
       input.password,
     );
 
-    if (!passwordMatches) {
-      throw new UnauthorizedException('Invalid email or password');
+    // The hint is only returned after a successful password verification, so
+    // it cannot be used to enumerate accounts.
+    if (!customerMatches) {
+      invalidCredentials();
     }
 
-    const candidates = await this.database.db.query.memberships.findMany({
-      where: eq(memberships.userId, user.id),
-      with: { tenant: true },
-    });
-
-    if (candidates.length === 0) {
-      throw new ForbiddenException('User does not belong to any tenant');
-    }
-
-    const membership = this.pickMembership(candidates, input.tenantSlug);
-
-    if (membership.tenant.status !== 'active') {
-      throw new ForbiddenException('Tenant is not active');
-    }
-
-    return this.buildAuthResult(user, membership, membership.tenant);
+    customerAccountHint();
   }
 
   async refresh(rawToken: string): Promise<AuthResult> {
@@ -347,9 +402,18 @@ export class AuthService {
       return candidates[0];
     }
 
-    throw new BadRequestException(
-      'tenantSlug is required when the user belongs to multiple tenants',
-    );
+    // No slug in the login form: pick the strongest active membership. Ties
+    // are resolved deterministically so the same account always lands in the
+    // same business.
+    return [...candidates].sort((a, b) => {
+      const byRole = STAFF_ROLE_RANK[a.role] - STAFF_ROLE_RANK[b.role];
+      if (byRole !== 0) {
+        return byRole;
+      }
+
+      const byName = a.tenant.name.localeCompare(b.tenant.name);
+      return byName !== 0 ? byName : a.tenant.id.localeCompare(b.tenant.id);
+    })[0];
   }
 
   private async buildAuthResult(

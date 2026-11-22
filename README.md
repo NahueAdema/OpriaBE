@@ -25,7 +25,7 @@ validación, **PostgreSQL 17** y **Drizzle ORM**.
 
 - Node.js 22 o superior
 - npm 10 o superior
-- Docker Desktop (solo para la base local)
+- Docker Desktop (opcional: solo si querés una base local separada; el dev usa la misma Neon que prod)
 
 > En Windows/PowerShell los shims `.ps1` de npm pueden estar bloqueados. Usá
 > `npm.cmd` en lugar de `npm`.
@@ -34,14 +34,17 @@ validación, **PostgreSQL 17** y **Drizzle ORM**.
 
 ```bash
 npm install
-cp .env.example .env
-
-npm run db:up        # Postgres local en 127.0.0.1:5433
-npm run db:migrate   # aplica las migraciones
-npm run db:seed      # tenant + usuario demo
+cp .env.example .env   # solo si aún no tenés .env; completá las URLs de Neon
 
 npm run start:dev
 ```
+
+El `.env` de desarrollo ya apunta a la **misma base Neon** que producción, así
+que no hace falta levantar Docker ni correr migraciones para arrancar. Si
+querés una base local aislada, recién ahí usá `npm run db:up` con el
+`DATABASE_URL` de `127.0.0.1:5433`. Tampoco corras `npm run db:seed` contra la
+Neon compartida salvo que quieras cargar el tenant demo otra vez (el seed es
+idempotente).
 
 La API queda en `http://localhost:3001`, la documentación en
 `http://localhost:3001/docs` y el readiness en
@@ -80,7 +83,7 @@ problema. No leas `process.env` fuera de ese archivo: inyectá `ConfigService`.
 | `PORT`                   | `3001`         | Puerto HTTP                                       |
 | `HOST`                   | `0.0.0.0`      | Interfaz de escucha                               |
 | `API_PREFIX`             | `v1`           | Prefijo global de las rutas                       |
-| `CORS_ORIGINS`           | vacío          | Orígenes permitidos, separados por coma           |
+| `CORS_ORIGINS`           | vacío          | Orígenes permitidos, separados por coma; en dev incluir `http://localhost:3000` y `http://127.0.0.1:3000` |
 | `LOG_LEVEL`              | `info`         | Nivel de Pino                                     |
 | `SWAGGER_ENABLED`        | según entorno  | `true` fuera de producción, `false` en producción |
 | `RATE_LIMIT_TTL_MS`      | `60000`        | Ventana del rate limit                            |
@@ -96,7 +99,7 @@ problema. No leas `process.env` fuera de ese archivo: inyectá `ConfigService`.
 
 ### Neon
 
-En producción usá la connection string **pooled** (`...-pooler...`) en
+En dev y producción usá la connection string **pooled** (`...-pooler...`) en
 `DATABASE_URL`: `DatabaseService` detecta el sufijo y desactiva los prepared
 statements, que PgBouncer en modo transacción no soporta.
 
@@ -115,7 +118,7 @@ npm run test         # tests unitarios
 npm run test:e2e     # tests end-to-end (auth requiere base)
 npm run format       # prettier
 
-npm run db:up        # docker compose up -d
+npm run db:up        # opcional: docker compose up -d (base local aislada)
 npm run db:down      # docker compose down
 npm run db:generate  # genera una migración desde el schema
 npm run db:migrate   # aplica migraciones pendientes
@@ -132,7 +135,7 @@ npm run db:seed      # datos demo
 | GET    | `/v1/health`                               | público           | Liveness probe                                           |
 | GET    | `/v1/health/ready`                         | público           | Readiness probe (incluye Postgres)                       |
 | POST   | `/v1/auth/register`                        | público           | Crea tenant + usuario Dueño                              |
-| POST   | `/v1/auth/login`                           | público           | Email + contraseña → tokens                              |
+| POST   | `/v1/auth/login`                           | público           | Email + contraseña → tokens (sin slug; elige el tenant activo por rol) |
 | POST   | `/v1/auth/refresh`                         | público           | Rota el refresh token                                    |
 | POST   | `/v1/auth/logout`                          | público           | Revoca la sesión (o todos los dispositivos)              |
 | POST   | `/v1/auth/change-password`                 | Bearer            | Cambia la contraseña y revoca las otras sesiones         |
