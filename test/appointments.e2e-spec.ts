@@ -91,6 +91,7 @@ describe.skipIf(!runDbTests)('appointments and public booking (e2e)', () => {
   let staffMember: StaffBody;
   let targetDate: string;
   let firstSlot: string;
+  let secondSlot: string;
 
   function headers(token: string): Record<string, string> {
     return { authorization: `Bearer ${token}` };
@@ -186,10 +187,16 @@ describe.skipIf(!runDbTests)('appointments and public booking (e2e)', () => {
     return response.json<PublicAvailabilityBody>();
   }
 
-  async function book(startsAt: string, customerName: string) {
+  async function book(
+    startsAt: string,
+    customerName: string,
+    clientIp?: string,
+  ) {
     return app.inject({
       method: 'POST',
       url: `/v1/public/businesses/${slug}/appointments`,
+      // A distinct forwarded IP keeps the per-route throttle out of the way.
+      headers: clientIp ? { 'x-forwarded-for': clientIp } : undefined,
       payload: {
         serviceId: service.id,
         startsAt,
@@ -212,15 +219,21 @@ describe.skipIf(!runDbTests)('appointments and public booking (e2e)', () => {
 
     // Pick a date far enough ahead to clear the minimum notice, then look at
     // the real availability so the test never hardcodes a slot.
-    targetDate = addDaysToDateKey(
-      localDateKey(new Date(), timezone),
-      7,
-    );
+    targetDate = addDaysToDateKey(localDateKey(new Date(), timezone), 7);
     await configureSchedule();
 
     const availability = await getPublicAvailability(targetDate);
-    expect(availability.slots.length).toBeGreaterThan(0);
+    expect(availability.slots.length).toBeGreaterThan(1);
     firstSlot = availability.slots[0].startsAt;
+
+    // Leave room for the 30 min service + 10 min buffer booked by other cases.
+    const distantSlot = availability.slots.find(
+      (slot) =>
+        new Date(slot.startsAt).getTime() - new Date(firstSlot).getTime() >=
+        45 * 60_000,
+    );
+    expect(distantSlot).toBeDefined();
+    secondSlot = distantSlot?.startsAt ?? firstSlot;
   });
 
   afterAll(async () => {
@@ -255,9 +268,9 @@ describe.skipIf(!runDbTests)('appointments and public booking (e2e)', () => {
     });
     expect(search.statusCode).toBe(200);
     expect(
-      search.json<{ items: Array<{ slug: string }> }>().items.map(
-        (item) => item.slug,
-      ),
+      search
+        .json<{ items: Array<{ slug: string }> }>()
+        .items.map((item) => item.slug),
     ).toContain(slug);
   });
 
@@ -439,5 +452,26 @@ describe.skipIf(!runDbTests)('appointments and public booking (e2e)', () => {
     const response = await book(`${targetDate}T03:00:00.000Z`, 'Guest Five');
 
     expect(response.statusCode).toBe(409);
+  });
+
+  it('accepts only one of two concurrent bookings for the same slot', async () => {
+    // Different forwarded IPs avoid the 5/min public-booking throttle; the
+    // anti-double-booking guard must be the database lock, not the rate limit.
+    const [first, second] = await Promise.all([
+      book(secondSlot, 'Concurrent One', '198.51.100.10'),
+      book(secondSlot, 'Concurrent Two', '198.51.100.11'),
+    ]);
+
+    expect([first.statusCode, second.statusCode].sort((a, b) => a - b)).toEqual(
+      [201, 409],
+    );
+
+    const winner = first.statusCode === 201 ? first : second;
+    expect(winner.json<PublicAppointmentBody>().startsAt).toBe(secondSlot);
+
+    const availability = await getPublicAvailability(targetDate);
+    expect(availability.slots.map((slot) => slot.startsAt)).not.toContain(
+      secondSlot,
+    );
   });
 });

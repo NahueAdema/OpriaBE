@@ -19,7 +19,7 @@ npm run test
 npm run build
 ```
 
-Los e2e con base (`RUN_DB_TESTS=1 npm run test:e2e`) usan sufijos únicos y limpian sus datos. No corras `npm run db:seed` contra la Neon compartida salvo que quieras recargar el tenant demo.
+Los e2e con base (`RUN_DB_TESTS=1 npm run test:e2e`) usan sufijos únicos y limpian sus datos. No corras `npm run db:seed` contra la Neon compartida salvo que quieras recargar el tenant demo. `npm run db:reset -- --yes` trunca todas las tablas de `app` con `DATABASE_URL_DIRECT`: está pensado para una base local aislada, no para la Neon compartida.
 
 ## Commits y hooks
 

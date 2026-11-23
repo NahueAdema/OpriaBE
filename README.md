@@ -125,7 +125,12 @@ npm run db:migrate   # aplica migraciones pendientes
 npm run db:push      # sincroniza el schema sin migración (solo dev)
 npm run db:studio    # Drizzle Studio
 npm run db:seed      # datos demo
+npm run db:reset -- --yes # TRUNCATE de todas las tablas del schema "app"
 ```
+
+`db:reset` es destructivo: exige `--yes`, usa `DATABASE_URL_DIRECT` (nunca el
+pooler), rechaza `NODE_ENV=production` y solo toca el schema `app`. Como dev y
+prod comparten la Neon, usalo solo contra una base local aislada.
 
 ## Endpoints
 

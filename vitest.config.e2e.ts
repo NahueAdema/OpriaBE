@@ -7,8 +7,9 @@ export default defineConfig({
     root: './',
     include: ['test/**/*.e2e-spec.ts'],
     // Dev and prod share a remote Neon database; allow for network latency.
-    testTimeout: 20_000,
-    hookTimeout: 20_000,
+    // The availability suite creates two tenants and five staff in beforeAll.
+    testTimeout: 30_000,
+    hookTimeout: 45_000,
     env: {
       NODE_ENV: 'test',
       LOG_LEVEL: 'silent',
