@@ -2,6 +2,7 @@ export * from './appointments.js';
 export * from './customer-refresh-tokens.js';
 export * from './customers.js';
 export * from './memberships.js';
+export * from './notification-jobs.js';
 export * from './refresh-tokens.js';
 export * from './relations.js';
 export * from './schema.js';

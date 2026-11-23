@@ -15,6 +15,7 @@ import { CustomerAppointmentsModule } from './customer-appointments/customer-app
 import { CustomerAuthModule } from './customer-auth/customer-auth.module.js';
 import { DatabaseModule } from './database/database.module.js';
 import { HealthModule } from './health/health.module.js';
+import { NotificationsModule } from './notifications/notifications.module.js';
 import { PublicBookingModule } from './public-booking/public-booking.module.js';
 import { ServicesModule } from './services/services.module.js';
 import { StaffModule } from './staff/staff.module.js';
@@ -75,6 +76,7 @@ import { StaffModule } from './staff/staff.module.js';
     }),
     HealthModule,
     DatabaseModule,
+    NotificationsModule,
     AuthModule,
     CustomerAuthModule,
     CustomerAppointmentsModule,

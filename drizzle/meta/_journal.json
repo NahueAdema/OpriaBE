@@ -50,6 +50,13 @@
       "when": 1794619167951,
       "tag": "0006_public_tyger_tiger",
       "breakpoints": true
+    },
+    {
+      "idx": 7,
+      "version": "7",
+      "when": 1795468006359,
+      "tag": "0007_friendly_raider",
+      "breakpoints": true
     }
   ]
 }
