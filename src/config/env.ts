@@ -54,6 +54,16 @@ export const envSchema = z.object({
   JWT_REFRESH_TTL_DAYS: z.coerce.number().int().positive().default(30),
   JWT_ISSUER: z.string().min(1).default('opria'),
   JWT_AUDIENCE: z.string().min(1).default('opria-api'),
+  /**
+   * Optional overrides. When absent, notification secrets are derived from
+   * JWT_ACCESS_SECRET with domain separation, so existing deployments keep
+   * working without new secrets. Set them explicitly in production.
+   */
+  NOTIFICATION_SIGNING_SECRET: z.string().min(32).optional(),
+  NOTIFICATION_WORKER_SECRET: z.string().min(32).optional(),
+  ACTION_LINK_TTL_HOURS: z.coerce.number().int().positive().default(168),
+  /** Absolute base URL used to build one-click links in emails. */
+  PUBLIC_API_URL: z.url().optional(),
 });
 
 export type Env = z.infer<typeof envSchema>;

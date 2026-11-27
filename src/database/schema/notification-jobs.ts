@@ -9,6 +9,7 @@ import {
   uuid,
   varchar,
 } from 'drizzle-orm/pg-core';
+import { appointments } from './appointments.js';
 import { appSchema } from './schema.js';
 import { tenants } from './tenants.js';
 
@@ -22,7 +23,13 @@ export const notificationJobStatus = appSchema.enum('notification_job_status', [
 export interface NotificationPayload {
   appointmentId?: string;
   customerName?: string;
+  businessName?: string;
+  serviceName?: string;
+  staffName?: string;
+  timezone?: string;
+  reason?: string;
   startsAt?: string;
+  /** Signed, short-lived link rendered into the email body. */
   actionUrl?: string;
   [key: string]: unknown;
 }
@@ -38,6 +45,10 @@ export const notificationJobs = appSchema.table(
     tenantId: uuid('tenant_id')
       .notNull()
       .references(() => tenants.id, { onDelete: 'cascade' }),
+    /** Links the outbox to its appointment so reminders can be cancelled. */
+    appointmentId: uuid('appointment_id').references(() => appointments.id, {
+      onDelete: 'cascade',
+    }),
     /** e.g. appointment_confirmation, appointment_reminder_24h. */
     type: varchar('type', { length: 80 }).notNull(),
     recipient: varchar('recipient', { length: 254 }).notNull(),
@@ -47,6 +58,8 @@ export const notificationJobs = appSchema.table(
       .defaultNow(),
     status: notificationJobStatus('status').notNull().default('pending'),
     attempts: integer('attempts').notNull().default(0),
+    /** Earliest instant the worker may retry a failed attempt (UTC). */
+    nextAttemptAt: timestamp('next_attempt_at', { withTimezone: true }),
     /** Idempotency key, usually `${appointmentId}:${type}:${scheduledAt}`. */
     dedupeKey: varchar('dedupe_key', { length: 200 }).notNull(),
     lockedAt: timestamp('locked_at', { withTimezone: true }),
@@ -61,6 +74,10 @@ export const notificationJobs = appSchema.table(
   },
   (table) => [
     uniqueIndex('notification_jobs_dedupe_key_uq').on(table.dedupeKey),
+    index('notification_jobs_appointment_idx').on(
+      table.appointmentId,
+      table.type,
+    ),
     index('notification_jobs_tenant_scheduled_idx').on(
       table.tenantId,
       table.scheduledAt,

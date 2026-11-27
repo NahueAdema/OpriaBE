@@ -13,6 +13,7 @@ import { ProblemDetailsFilter } from './common/http/problem-details.filter.js';
 import { type Env, validateEnv } from './config/env.js';
 import { CustomerAppointmentsModule } from './customer-appointments/customer-appointments.module.js';
 import { CustomerAuthModule } from './customer-auth/customer-auth.module.js';
+import { CustomersModule } from './customers/customers.module.js';
 import { DatabaseModule } from './database/database.module.js';
 import { HealthModule } from './health/health.module.js';
 import { NotificationsModule } from './notifications/notifications.module.js';
@@ -80,6 +81,7 @@ import { StaffModule } from './staff/staff.module.js';
     AuthModule,
     CustomerAuthModule,
     CustomerAppointmentsModule,
+    CustomersModule,
     BusinessModule,
     ServicesModule,
     StaffModule,

@@ -1,21 +1,36 @@
 import { Inject, Injectable } from '@nestjs/common';
 import { and, asc, eq, inArray, isNull, lt, lte, or } from 'drizzle-orm';
 import { Logger as PinoLogger } from 'nestjs-pino';
-import { DatabaseService } from '../database/database.service.js';
+import {
+  type Database,
+  DatabaseService,
+} from '../database/database.service.js';
 import {
   type NewNotificationJob,
   notificationJobs,
+  notificationLog,
   type NotificationJob,
   type NotificationJobStatus,
   type NotificationPayload,
 } from '../database/schema/index.js';
 import { EMAIL_PROVIDER, type EmailProvider } from './email.provider.js';
+import { renderNotification } from './templates.js';
+
+/** Both the root database and a Drizzle transaction satisfy this surface. */
+export type NotificationTx = Parameters<
+  Parameters<Database['transaction']>[0]
+>[0];
+type NotificationDb = Database | NotificationTx;
 
 const MAX_ATTEMPTS = 5;
 const LEASE_MINUTES = 5;
+const BACKOFF_BASE_MINUTES = 1;
+const BACKOFF_MAX_MINUTES = 60;
 
 export interface EnqueueNotificationInput {
   tenantId: string;
+  /** Set for appointment emails so reminders can be cancelled in one query. */
+  appointmentId?: string;
   type: string;
   recipient: string;
   payload: NotificationPayload;
@@ -29,27 +44,6 @@ export interface ProcessBatchResult {
   failed: number;
 }
 
-const subjectByType: Record<string, string> = {
-  appointment_confirmation: 'Turno confirmado',
-  appointment_rejected: 'Turno rechazado',
-  appointment_cancelled: 'Turno cancelado',
-  appointment_reminder_24h: 'Recordatorio: tu turno es mañana',
-  appointment_reminder_2h: 'Recordatorio: tu turno es en 2 horas',
-  payment_expired: 'Reserva cancelada por falta de pago',
-};
-
-function messageFor(job: NotificationJob) {
-  const name = job.payload.customerName ?? '';
-  const greeting = name ? `Hola ${name}:` : 'Hola:';
-  const when = job.payload.startsAt ? ` ${job.payload.startsAt}` : '';
-
-  return {
-    to: job.recipient,
-    subject: subjectByType[job.type] ?? 'Novedades sobre tu turno',
-    text: `${greeting}${when}. Gestioná tu reserva desde Opria.`,
-  };
-}
-
 @Injectable()
 export class NotificationsService {
   constructor(
@@ -58,12 +52,17 @@ export class NotificationsService {
     private readonly logger: PinoLogger,
   ) {}
 
-  /** Inserts an outbox row; a duplicate dedupe key is a no-op. */
+  /**
+   * Inserts an outbox row; a duplicate dedupe key is a no-op. Pass the open
+   * transaction when the event must be atomic with the appointment write.
+   */
   async enqueue(
     input: EnqueueNotificationInput,
+    tx?: NotificationTx,
   ): Promise<NotificationJob | null> {
+    const db: NotificationDb = tx ?? this.database.db;
     const values: NewNotificationJob = input;
-    const [created] = await this.database.db
+    const [created] = await db
       .insert(notificationJobs)
       .values(values)
       .onConflictDoNothing({ target: notificationJobs.dedupeKey })
@@ -79,15 +78,37 @@ export class NotificationsService {
     );
 
     return (
-      (await this.database.db.query.notificationJobs.findFirst({
+      (await db.query.notificationJobs.findFirst({
         where: eq(notificationJobs.dedupeKey, input.dedupeKey),
       })) ?? null
     );
   }
 
+  /** Drops scheduled jobs that must no longer be delivered (e.g. reminders). */
+  async cancelPendingForAppointment(
+    appointmentId: string,
+    types: readonly string[],
+    tx?: NotificationTx,
+  ): Promise<number> {
+    const db: NotificationDb = tx ?? this.database.db;
+    const cancelled = await db
+      .delete(notificationJobs)
+      .where(
+        and(
+          eq(notificationJobs.appointmentId, appointmentId),
+          eq(notificationJobs.status, 'pending'),
+          inArray(notificationJobs.type, [...types]),
+        ),
+      )
+      .returning({ id: notificationJobs.id });
+
+    return cancelled.length;
+  }
+
   /**
    * Claims due jobs with `FOR UPDATE SKIP LOCKED`, sends them and records the
-   * outcome. A failed attempt stays pending until `MAX_ATTEMPTS` is reached.
+   * outcome. Failed attempts are retried with exponential backoff up to
+   * `MAX_ATTEMPTS`; every attempt is written to `notification_log`.
    */
   async processBatch(
     limit = 20,
@@ -104,6 +125,10 @@ export class NotificationsService {
             eq(notificationJobs.status, 'pending'),
             lte(notificationJobs.scheduledAt, now),
             lt(notificationJobs.attempts, MAX_ATTEMPTS),
+            or(
+              isNull(notificationJobs.nextAttemptAt),
+              lte(notificationJobs.nextAttemptAt, now),
+            ),
             or(
               isNull(notificationJobs.lockedAt),
               lt(notificationJobs.lockedAt, staleBefore),
@@ -133,29 +158,18 @@ export class NotificationsService {
     let failed = 0;
 
     for (const job of claimed) {
+      const attempt = job.attempts + 1;
+
       try {
-        await this.email.send(messageFor(job));
-        await this.database.db
-          .update(notificationJobs)
-          .set({ status: 'done', lockedAt: null, updatedAt: new Date() })
-          .where(eq(notificationJobs.id, job.id));
+        await this.email.send(renderNotification(job));
+        await this.record(job, attempt, 'sent', now);
         processed += 1;
       } catch (error) {
-        const attempts = job.attempts + 1;
         const status: NotificationJobStatus =
-          attempts >= MAX_ATTEMPTS ? 'failed' : 'pending';
+          attempt >= MAX_ATTEMPTS ? 'failed' : 'pending';
         const reason = error instanceof Error ? error.message : String(error);
 
-        await this.database.db
-          .update(notificationJobs)
-          .set({
-            attempts,
-            status,
-            lockedAt: null,
-            lastError: reason.slice(0, 500),
-            updatedAt: new Date(),
-          })
-          .where(eq(notificationJobs.id, job.id));
+        await this.record(job, attempt, 'failed', now, reason, status);
         failed += 1;
       }
     }
@@ -169,5 +183,53 @@ export class NotificationsService {
     }
 
     return { processed, failed };
+  }
+
+  private async record(
+    job: NotificationJob,
+    attempt: number,
+    outcome: 'sent' | 'failed',
+    now: Date,
+    error?: string,
+    status: NotificationJobStatus = 'done',
+  ): Promise<void> {
+    const nextAttemptAt =
+      outcome === 'failed' && status === 'pending'
+        ? new Date(now.getTime() + this.backoffMs(attempt))
+        : null;
+
+    await this.database.db.transaction(async (tx) => {
+      await tx
+        .update(notificationJobs)
+        .set({
+          attempts: attempt,
+          status,
+          lockedAt: null,
+          nextAttemptAt,
+          ...(error ? { lastError: error.slice(0, 500) } : {}),
+          updatedAt: new Date(),
+        })
+        .where(eq(notificationJobs.id, job.id));
+
+      await tx.insert(notificationLog).values({
+        tenantId: job.tenantId,
+        jobId: job.id,
+        type: job.type,
+        recipient: job.recipient,
+        outcome,
+        attempt,
+        ...(error ? { error: error.slice(0, 500) } : {}),
+      });
+    });
+  }
+
+  /** 1, 2, 4, 8, 16 minutes: bounded so jobs cannot disappear for hours. */
+  private backoffMs(attempt: number): number {
+    const minutes = Math.min(
+      BACKOFF_BASE_MINUTES * 2 ** Math.max(0, attempt - 1),
+      BACKOFF_MAX_MINUTES,
+    );
+
+    return minutes * 60_000;
   }
 }

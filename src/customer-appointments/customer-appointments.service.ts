@@ -13,6 +13,7 @@ import {
   type Tenant,
   tenants,
 } from '../database/schema/index.js';
+import { AppointmentNotificationsService } from '../notifications/appointment-notifications.service.js';
 import type {
   CreateCustomerAppointmentInput,
   CustomerAppointment,
@@ -28,6 +29,7 @@ export class CustomerAppointmentsService {
   constructor(
     private readonly database: DatabaseService,
     private readonly appointments: AppointmentsService,
+    private readonly notifications: AppointmentNotificationsService,
   ) {}
 
   async list(
@@ -139,21 +141,37 @@ export class CustomerAppointmentsService {
       );
     }
 
-    const [updated] = await this.database.db
-      .update(appointments)
-      .set({
-        status: 'cancelled',
-        statusReason: 'Cancelled by customer',
-        statusChangedAt: now,
-      })
-      .where(
-        and(
-          eq(appointments.id, appointmentId),
-          eq(appointments.customerId, customerId),
-          inArray(appointments.status, [...CANCELLABLE_STATUSES]),
-        ),
-      )
-      .returning();
+    const [updated] = await this.database.db.transaction(async (tx) => {
+      const rows = await tx
+        .update(appointments)
+        .set({
+          status: 'cancelled',
+          statusReason: 'Cancelled by customer',
+          statusChangedAt: now,
+        })
+        .where(
+          and(
+            eq(appointments.id, appointmentId),
+            eq(appointments.customerId, customerId),
+            inArray(appointments.status, [...CANCELLABLE_STATUSES]),
+          ),
+        )
+        .returning();
+
+      const cancelled = rows[0];
+
+      if (cancelled) {
+        await this.notifications.statusChanged(
+          cancelled,
+          row.tenant,
+          'cancelled',
+          'Cancelled by customer',
+          tx,
+        );
+      }
+
+      return rows;
+    });
 
     if (!updated) {
       throw new ConflictException('The appointment changed, try again');

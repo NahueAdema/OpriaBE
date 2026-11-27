@@ -38,6 +38,11 @@
   `workingHoursOverlapIssues`.
 - Los bloqueos son rangos ISO 8601 con offset; dos bloqueos del mismo staff no
   pueden solaparse (`409`).
+- El panel de clientes vive en `/v1/customers`: listado derivado de turnos con
+  `LEFT JOIN` al perfil por teléfono, ficha con historial, notas y
+  consentimiento por tenant (`customer_profiles`) y CSV con BOM UTF-8,
+  separador `;` y celdas saneadas contra inyección de fórmulas.
+  `app.customers` es solo el realm global de auth; no mezcles ambos conceptos.
 
 ## Disponibilidad
 
@@ -78,8 +83,11 @@
   antes de insertar. No reemplaces ese lock por un chequeo en memoria.
 - La API del negocio vive en `/v1/appointments` (`@Roles('owner', 'admin',
   'staff')`) y siempre filtra por `tenantId`. El tenant sale del token, nunca
-  del body. Solo hay listado (`GET`) y cambio de estado
-  (`PATCH /:id/status`); no hay alta manual de turnos.
+  del body. Incluye listado (`GET`), alta manual (`POST`, con
+  `Idempotency-Key`), cambio de estado (`PATCH /:id/status`) y reprogramación
+  (`PATCH /:id/reschedule`). El alta valida disponibilidad, asigna staff si
+  falta y usa el mismo advisory lock que la reserva pública; la reprogramación
+  conserva el `id`, respeta `cancellationHours` y reagenda recordatorios.
 - La API pública vive en `/v1/public/businesses` y usa `@Public()`:
   `GET /` (buscador por `?q=`), `GET /:slug` (perfil + servicios),
   `GET /:slug/availability`, `GET /:slug/calendar` y

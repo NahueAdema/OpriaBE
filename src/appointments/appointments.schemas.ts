@@ -98,6 +98,38 @@ export const createAppointmentInputSchema = z.object({
   notes: z.string().trim().max(500).optional(),
 });
 
+/** Header sent by the panel so a retried submit cannot book twice. */
+export const idempotencyKeySchema = z
+  .string()
+  .trim()
+  .min(8)
+  .max(255)
+  .describe('Stable per-request key (Idempotency-Key header)');
+
+export const idempotencyHeadersSchema = z.object({
+  'idempotency-key': idempotencyKeySchema,
+});
+
+/**
+ * Manual booking from the panel. A professional can be chosen explicitly;
+ * otherwise the first available one is assigned. `startsAt` is still checked
+ * against the tenant's availability before inserting.
+ */
+export const createPanelAppointmentSchema = createAppointmentInputSchema.extend(
+  {
+    staffId: z.uuid().optional(),
+    customerId: z.uuid().optional(),
+    status: z.enum(['pending', 'confirmed']).default('confirmed'),
+    /** Records consent for the treatment of the customer's data. */
+    consent: z.boolean().optional(),
+  },
+);
+
+export const rescheduleAppointmentSchema = z.object({
+  startsAt: timeSchema.describe('New ISO 8601 instant with offset or Z'),
+  reason: z.string().trim().max(500).optional(),
+});
+
 export type AppointmentResponse = z.infer<typeof appointmentResponseSchema>;
 export type AppointmentListResponse = z.infer<
   typeof appointmentListResponseSchema
@@ -109,6 +141,13 @@ export type UpdateAppointmentStatusInput = z.infer<
 >;
 export type CreateAppointmentInput = z.infer<
   typeof createAppointmentInputSchema
+>;
+export type IdempotencyHeaders = z.infer<typeof idempotencyHeadersSchema>;
+export type CreatePanelAppointmentInput = z.infer<
+  typeof createPanelAppointmentSchema
+>;
+export type RescheduleAppointmentInput = z.infer<
+  typeof rescheduleAppointmentSchema
 >;
 
 export { dateKeySchema };

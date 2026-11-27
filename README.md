@@ -96,6 +96,10 @@ problema. No leas `process.env` fuera de ese archivo: inyectá `ConfigService`.
 | `JWT_REFRESH_TTL_DAYS`   | `30`           | Vida del refresh token                            |
 | `JWT_ISSUER`             | `opria`        | Claim `iss` esperado                              |
 | `JWT_AUDIENCE`           | `opria-api`    | Claim `aud` esperado                              |
+| `NOTIFICATION_SIGNING_SECRET` | derivado de `JWT_ACCESS_SECRET` | HMAC de enlaces de email (mín. 32) |
+| `NOTIFICATION_WORKER_SECRET` | `JWT_ACCESS_SECRET` | Secreto compartido del worker (mín. 32) |
+| `ACTION_LINK_TTL_HOURS`  | `168`          | Horas de validez de los enlaces firmados          |
+| `PUBLIC_API_URL`         | según entorno  | Base absoluta de los enlaces (incluye `/v1`)      |
 
 ### Neon
 
@@ -105,6 +109,26 @@ statements, que PgBouncer en modo transacción no soporta.
 
 Para migraciones, `DATABASE_URL_DIRECT` debe apuntar a la conexión **directa**
 (sin `-pooler`). Si no se define, se usa `DATABASE_URL`.
+
+### Notificaciones (F3)
+
+Los eventos de turnos escriben en `app.notification_jobs` dentro de la misma
+transacción que el turno. El workflow `.github/workflows/notifications.yml`
+despierta Render y llama cada 5 minutos a
+`POST /v1/notifications/process` con el header
+`x-notification-secret`. El worker toma un lote con `FOR UPDATE SKIP LOCKED`,
+aplica backoff exponencial y deja cada intento en `app.notification_log`.
+
+Configuración en GitHub:
+
+- Secret `NOTIFICATION_WORKER_SECRET` (si no existe, usa `JWT_ACCESS_SECRET`).
+- Variable `OPRIA_API_URL`, por defecto `https://opriabe.onrender.com`.
+
+En Render conviene definir `PUBLIC_API_URL` (por ejemplo
+`https://opriabe.onrender.com/v1`) para que los enlaces de los emails apunten a
+la API pública. `NOTIFICATION_SIGNING_SECRET` y `NOTIFICATION_WORKER_SECRET`
+son opcionales: por defecto se derivan del secreto JWT con separación de
+dominio.
 
 ## Scripts
 
@@ -166,7 +190,13 @@ prod comparten la Neon, usalo solo contra una base local aislada.
 | DELETE | `/v1/staff/:id/time-blocks/:blockId`       | owner/admin       | Elimina un bloqueo                                       |
 | GET    | `/v1/availability`                         | Bearer            | Franjas libres (`?serviceId=&date=&staffId?=`)           |
 | GET    | `/v1/appointments`                         | Bearer            | Turnos (`?from=&to=&status=&staffId=&serviceId=&limit=`) |
+| POST   | `/v1/appointments`                         | owner/admin/staff | Alta manual (header `Idempotency-Key`)                   |
 | PATCH  | `/v1/appointments/:id/status`              | owner/admin/staff | Cambia el estado del turno                               |
+| PATCH  | `/v1/appointments/:id/reschedule`          | owner/admin/staff | Reprograma conservando el `id`                           |
+| GET    | `/v1/customers`                            | Bearer            | Clientes del tenant (`?q=&limit=`)                       |
+| GET    | `/v1/customers/:phone`                     | Bearer            | Ficha del cliente con historial                          |
+| PATCH  | `/v1/customers/:phone`                     | owner/admin/staff | Notas y consentimiento del cliente                       |
+| GET    | `/v1/customers/export`                     | owner/admin/staff | Export CSV (BOM UTF-8, separador `;`)                    |
 | GET    | `/v1/public/businesses`                    | público           | Buscador (`?q=&city=&service=`)                          |
 | GET    | `/v1/public/businesses/filters`            | público           | Ciudades y servicios disponibles                         |
 | GET    | `/v1/public/businesses/:slug`              | público           | Perfil público + servicios                               |
@@ -184,8 +214,8 @@ prod comparten la Neon, usalo solo contra una base local aislada.
 | GET    | `/docs`                                    | —                 | Swagger UI                                               |
 | GET    | `/docs/openapi.json`                       | —                 | Documento OpenAPI                                        |
 
-Los tests e2e de auth, configuración y turnos necesitan una base migrada y se
-activan con `RUN_DB_TESTS=1`:
+Los tests e2e de auth, configuración, turnos, panel de clientes y notificaciones
+necesitan una base migrada y se activan con `RUN_DB_TESTS=1`:
 
 ```bash
 RUN_DB_TESTS=1 DATABASE_URL=postgres://opria:opria@127.0.0.1:5433/opria npm run test:e2e
@@ -239,10 +269,15 @@ src/
     availability.schemas.ts    # query y respuesta
     availability.ts            # motor puro + conversión timezone/DST
   appointments/
-    appointments.controller.ts # /appointments y /appointments/:id/status
-    appointments.service.ts    # listado y cambio de estado
+    appointments.controller.ts # /appointments, :id/status y :id/reschedule
+    appointments.service.ts    # alta manual, listado, cambio de estado, reprogramación e idempotencia
     appointments.transitions.ts # transiciones y estados que bloquean
     appointments.schemas.ts    # query, body y respuesta de turnos
+  customers/
+    customers.controller.ts # /customers, /:phone y /export
+    customers.service.ts    # listado, ficha, notas, consentimiento y CSV
+    customers.schemas.ts    # query, params y body
+    csv.ts                  # BOM UTF-8, separador ; y saneado de fórmulas
   public-booking/
     public-booking.controller.ts # /public/businesses
     public-booking.service.ts    # búsqueda, perfil, slots, calendario y reserva
@@ -252,8 +287,9 @@ src/
     database.service.ts     # pool lazy + ping()
     seed.ts
     schema/                 # tenants, users, memberships, refresh_tokens,
-                            # services, staff, staff_services,
-                            # working_hours, time_blocks, appointments
+                            # services, staff, staff_services, working_hours,
+                            # time_blocks, appointments, idempotency_keys,
+                            # customer_profiles, notification_jobs, notification_log
   health/
 drizzle/                    # migraciones generadas (versionadas)
 ```
@@ -304,6 +340,14 @@ customers 1 ── * customer_refresh_tokens
   Es independiente de `users`: no tiene memberships ni acceso al panel.
 - `customer_refresh_tokens`: refresh tokens opacos de cliente, con el mismo
   esquema de familias y rotación que `refresh_tokens`.
+- `idempotency_keys`: ledger por tenant + clave, con el fingerprint del request.
+  Un replay devuelve el turno original vigente; reutilizar la clave con otro
+  payload responde `409`.
+- `customer_profiles`: notas internas y consentimiento por tenant, identificados
+  por teléfono. El listado de clientes se deriva de los turnos con `LEFT JOIN`
+  al perfil, así que también aparecen los invitados.
+- `notification_jobs` y `notification_log`: cola de F3 con próximo intento,
+  `appointment_id`, dedupe y registro de cada envío.
 
 Todas las tablas tienen `created_at` y `updated_at`. Las tablas de negocio que
 se agreguen deben incluir `tenant_id` para el aislamiento multi-tenant.
@@ -386,6 +430,21 @@ Los clientes finales tienen su propia cuenta, separada del staff: viven en
 - **Invitados.** La reserva pública sigue funcionando sin cuenta. Los turnos
   viejos de invitado no se vinculan por email: sin verificación de email,
   cualquiera podría reclamar el turno de otra persona.
+
+## Clientes del panel
+
+`GET /v1/customers` lista clientes del tenant activo, incluidos invitados
+identificados por teléfono. `GET /v1/customers/:phone` devuelve la ficha con su
+historial de turnos y `PATCH /v1/customers/:phone` guarda notas internas y
+consentimiento en `customer_profiles` (la crea al primer guardado).
+
+`GET /v1/customers/export` usa el mismo filtro `?q=` que el listado y devuelve
+un CSV con BOM UTF-8, separador `;` y celdas saneadas cuando empiezan con `=`,
+`+`, `-` o `@` para evitar inyección de fórmulas.
+
+`app.customers` sigue siendo el realm global de autenticación de clientes; las
+notas y el consentimiento son datos privados de cada negocio y nunca se comparten
+entre tenants.
 
 ## Configuración del negocio
 
@@ -472,6 +531,28 @@ Como el constraint no considera buffers, la creación toma
 `pg_advisory_xact_lock(hashtext(staff_id))` y, dentro de la transacción,
 revalida solapamiento con buffer antes de insertar. Un segundo request
 simultáneo recibe `409`.
+
+### Alta manual y reprogramación desde el panel
+
+`POST /v1/appointments` crea turnos desde el panel con `owner`, `admin` o
+`staff`. Requiere `serviceId`, `startsAt`, `customerName` y `customerPhone`;
+`customerEmail`, `notes`, `staffId` y `status` (`pending` por defecto) son
+opcionales. Si falta `staffId`, se autoasigna el primero libre. El header
+`Idempotency-Key` se guarda por tenant junto al fingerprint del body:
+
+- Un replay con la misma clave y el mismo payload devuelve el turno original,
+  con su estado actual (no una copia del momento de la creación).
+- La misma clave con otro payload responde `409`.
+
+La creación usa el mismo `computeAvailability`, advisory lock y constraint de
+exclusión que la reserva pública. Con `status: 'confirmed'` no se genera el
+evento de «solicitud recibida»: se envían la confirmación y los recordatorios.
+
+`PATCH /v1/appointments/:id/reschedule` recibe `startsAt` y un `reason`
+opcional. Conserva el `id`, valida el nuevo slot, respeta `cancellationHours`,
+mantiene el profesional asignado, reprograma los recordatorios pendientes y
+emite `appointment_rescheduled*` para cliente y negocio. Los turnos ajenos al
+tenant responden `404`.
 
 ### Buscador público
 
@@ -595,12 +676,14 @@ Los workflows viven en `.github/workflows/`:
 | ------------------------ | ---------------------------------------------------- |
 | `RENDER_DEPLOY_HOOK_URL` | URL del Deploy Hook del Web Service en Render         |
 | `DATABASE_URL_DIRECT`    | Connection string de Neon para `drizzle-kit migrate`  |
+| `NOTIFICATION_WORKER_SECRET` | Secreto del header del cron de notificaciones     |
 
 ### Variables
 
 | Nombre                  | Default | Uso                                             |
 | ----------------------- | ------- | ----------------------------------------------- |
 | `RENDER_DEPLOY_ENABLED` | `false` | Poner `true` para habilitar el deploy automático |
+| `OPRIA_API_URL`         | `https://opriabe.onrender.com` | Base del worker de notificaciones |
 
 ### Configuración en Render
 
@@ -611,7 +694,7 @@ El Web Service (`https://opriabe.onrender.com/`) usa:
 - Health Check Path: `/v1/health`
 - `NODE_VERSION=22`, `NODE_ENV=production`
 - `DATABASE_URL` (la connection string pooled de Neon), `JWT_ACCESS_SECRET`,
-  `CORS_ORIGINS`
+  `CORS_ORIGINS`, `PUBLIC_API_URL`
 
 `CORS_ORIGINS` debe incluir el origin del frontend, por ejemplo
 `https://opriadev.netlify.app`. Las migraciones no las corre Render solas: las

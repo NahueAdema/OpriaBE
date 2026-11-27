@@ -12,12 +12,10 @@ import cookie from '@fastify/cookie';
 import helmet from '@fastify/helmet';
 import { Logger as PinoLogger } from 'nestjs-pino';
 import { AppModule } from './app.module.js';
+import { WORKER_HEADER } from './notifications/notification-worker.guard.js';
 import type { Env } from './config/env.js';
 
-const DEV_CORS_ORIGINS = [
-  'http://localhost:3000',
-  'http://127.0.0.1:3000',
-];
+const DEV_CORS_ORIGINS = ['http://localhost:3000', 'http://127.0.0.1:3000'];
 
 export async function createApp(): Promise<NestFastifyApplication> {
   const adapter = new FastifyAdapter({
@@ -83,6 +81,10 @@ export async function createApp(): Promise<NestFastifyApplication> {
           scheme: 'bearer',
           bearerFormat: 'JWT',
         })
+        .addApiKey(
+          { type: 'apiKey', name: WORKER_HEADER, in: 'header' },
+          'worker',
+        )
         .build(),
     );
 

@@ -57,6 +57,20 @@
       "when": 1795468006359,
       "tag": "0007_friendly_raider",
       "breakpoints": true
+    },
+    {
+      "idx": 8,
+      "version": "7",
+      "when": 1795674264011,
+      "tag": "0008_chief_sleeper",
+      "breakpoints": true
+    },
+    {
+      "idx": 9,
+      "version": "7",
+      "when": 1795745473769,
+      "tag": "0009_crazy_sally_floyd",
+      "breakpoints": true
     }
   ]
 }

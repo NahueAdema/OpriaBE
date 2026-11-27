@@ -1,0 +1,41 @@
+name: Process notifications
+
+# Drains the durable outbox and wakes the Render service when it is asleep.
+on:
+  schedule:
+    - cron: '*/5 * * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: opria-be-notifications
+  cancel-in-progress: true
+
+jobs:
+  process:
+    name: Enviar notificaciones pendientes
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      API_URL: ${{ vars.OPRIA_API_URL || 'https://opriabe.onrender.com' }}
+      WORKER_SECRET: ${{ secrets.NOTIFICATION_WORKER_SECRET || secrets.JWT_ACCESS_SECRET }}
+    steps:
+      - name: Llamar al worker protegido
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ -z "$WORKER_SECRET" ]; then
+            echo 'Falta NOTIFICATION_WORKER_SECRET (o JWT_ACCESS_SECRET)' >&2
+            exit 1
+          fi
+          curl --fail --silent --show-error \
+            --max-time 300 \
+            --request POST \
+            --header 'content-type: application/json' \
+            --header "x-notification-secret: $WORKER_SECRET" \
+            --data '{"limit":50}' \
+            "$API_URL/v1/notifications/process"
+          echo
+          echo 'Lote de notificaciones procesado'
